@@ -19,6 +19,7 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 AOS_REPO="${AOS_REPO_URL:-https://github.com/maximilianwruhs-cyber/AOS-Customer-Edition.git}"
+
 AOS_DIR="$HOME/AOS"
 
 step()  { echo -e "\n${CYAN}${BOLD}[$1/8]${NC} ${BOLD}$2${NC}"; }

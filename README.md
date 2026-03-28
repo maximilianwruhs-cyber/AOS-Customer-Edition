@@ -16,7 +16,7 @@ AOS is a sovereign artificial intelligence layer built for Ubuntu that treats la
 On a fresh **Ubuntu 24.04 LTS** machine, run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/maximilianwruhs-cyber/AOS-Customer-Edition/main/deploy/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/maximilianwruhs-cyber/AOS-Customer-Edition/master/deploy/bootstrap.sh | bash
 ```
 
 <details>
