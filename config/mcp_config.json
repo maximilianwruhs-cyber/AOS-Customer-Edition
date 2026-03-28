@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "lm-studio": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "fastmcp",
+        "--with",
+        "httpx",
+        "lm_studio_mcp.py"
+      ]
+    }
+  }
+}

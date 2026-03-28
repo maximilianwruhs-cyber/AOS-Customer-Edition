@@ -1,0 +1,149 @@
+---
+# ============================================================
+# AOS LIGHT PROVISIONING (for Custom ISO deployments)
+# All binaries, models, and deps are pre-baked into the ISO.
+# This playbook ONLY configures the system — no downloads.
+# ============================================================
+- name: 🏛️ AOS — Agentic Operating System — Light Provisioning (ISO Mode)
+  hosts: localhost
+  become: yes
+  vars:
+    aos_dir: "/opt/aos/repo"  # ISO layout: repo lives under /opt/aos/repo
+    venv_dir: "/opt/aos/.venv"
+    real_user: "{{ ansible_env.SUDO_USER | default(ansible_env.USER) }}"
+
+  tasks:
+    # 1. HARDWARE PERMISSIONS
+    - name: ⚡ Check Intel RAPL powercap directory
+      stat:
+        path: /sys/class/powercap/intel-rapl:0/energy_uj
+      register: rapl_stat
+
+    - name: 🔓 Unlock RAPL energy counters for Telemetry
+      file:
+        path: /sys/class/powercap/intel-rapl:0/energy_uj
+        mode: '0444'
+      when: rapl_stat.stat.exists
+
+    - name: 🔒 Persist RAPL unlock across reboots
+      copy:
+        dest: /etc/systemd/system/rapl-unlock.service
+        content: |
+          [Unit]
+          Description=Unlock Intel RAPL energy counters for AOS Telemetry
+          After=local-fs.target
+          
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/chmod 0444 /sys/class/powercap/intel-rapl:0/energy_uj
+          RemainAfterExit=yes
+          
+          [Install]
+          WantedBy=multi-user.target
+      when: rapl_stat.stat.exists
+
+    - name: 🚀 Enable RAPL unlock service
+      systemd:
+        name: rapl-unlock
+        daemon_reload: yes
+        enabled: yes
+        state: started
+      when: rapl_stat.stat.exists
+
+    - name: 🔓 Fix AppArmor user namespace restriction (Ubuntu 24.04)
+      sysctl:
+        name: kernel.apparmor_restrict_unprivileged_userns
+        value: '0'
+        sysctl_file: /etc/sysctl.d/20-apparmor-userns.conf
+        reload: yes
+      ignore_errors: yes
+
+    # 2. HARDWARE PROFILING
+    - name: 🧮 Hardware Profiling (Detect System RAM)
+      set_fact:
+        baseline_model: >-
+          {% if ansible_memtotal_mb < 8192 %}
+          qwen2.5-coder-1.5b-instruct
+          {% elif ansible_memtotal_mb >= 8192 and ansible_memtotal_mb < 24576 %}
+          qwen2.5-coder-7b-instruct
+          {% else %}
+          deepseek-coder-33b-instruct
+          {% endif %}
+
+    - name: 📝 Log detected hardware profile
+      debug:
+        msg: "RAM: {{ ansible_memtotal_mb }}MB | Selected Model: {{ baseline_model }}"
+
+    # 3. SYSTEMD SERVICES
+    - name: ⚙️ Create LM Studio Headless Daemon
+      copy:
+        dest: /etc/systemd/system/lm-studio.service
+        content: |
+          [Unit]
+          Description=LM Studio Headless Server API
+          After=network.target
+          
+          [Service]
+          User={{ real_user }}
+          WorkingDirectory=/home/{{ real_user }}
+          ExecStart=/usr/bin/xvfb-run -a /opt/lm-studio/LM_Studio.AppImage server start
+          Restart=on-failure
+          RestartSec=5
+          Environment="APPIMAGE_EXTRACT_AND_RUN=1"
+          
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: ⚙️ Create AOS Daemon
+      copy:
+        dest: /etc/systemd/system/aos-core.service
+        content: |
+          [Unit]
+          Description=AOS — Agentic Operating System
+          After=network.target
+          
+          [Service]
+          User={{ real_user }}
+          WorkingDirectory={{ aos_dir }}
+          ExecStart={{ venv_dir }}/bin/python3 -m aos.gateway.app
+          Restart=on-failure
+          RestartSec=10
+          Environment="PYTHONUNBUFFERED=1"
+          
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: 🚀 Enable and Start all daemons
+      systemd:
+        name: "{{ item }}"
+        daemon_reload: yes
+        enabled: yes
+        state: started
+      loop:
+        - lm-studio
+        - aos-core
+      ignore_errors: yes
+
+    # 4. INSTALL PRE-BUILT EXTENSION
+    - name: 🏛️ Install AOS Intelligence Dashboard extension
+      shell: codium --install-extension {{ aos_dir }}/deploy/extensions/aos-telemetry-*.vsix --force
+      become_user: "{{ real_user }}"
+      ignore_errors: yes
+
+    # 5. OPTIONAL: Pull latest code if internet is available
+    - name: 🌐 Check internet connectivity
+      uri:
+        url: https://github.com
+        timeout: 5
+      register: internet_check
+      ignore_errors: yes
+
+    - name: 📥 Pull latest AOS code (if online)
+      git:
+        repo: "https://github.com/maximilianwruhs-cyber/AOS-Customer-Edition.git"
+        dest: "{{ aos_dir }}"
+        version: main
+        update: yes
+      become_user: "{{ real_user }}"
+      when: internet_check is succeeded
+      ignore_errors: yes

@@ -1,0 +1,404 @@
+---
+- name: 🏛️ AOS — Agentic Operating System — Provisioning & Installation
+  hosts: localhost
+  become: yes
+  vars:
+    aos_dir: "{{ playbook_dir }}/../.."
+    real_user: "{{ ansible_env.SUDO_USER | default(ansible_env.USER) }}"
+    lm_studio_url: "https://lmstudio.ai/download/latest/linux/x64"
+    deploy_mode: "{{ mode | default('online') }}"  # 'online' or 'iso'
+
+  tasks:
+    # ============================================================
+    # 1. BASELINE INFRASTRUCTURE & PERMISSIONS
+    # ============================================================
+    - name: 📦 Install baseline dependencies
+      apt:
+        name: 
+          - git
+          - curl
+          - python3.12-venv
+          - libfuse2t64  # Ubuntu 24.04 Time64 transition
+          - linux-tools-generic
+          - python3-pip
+          - xvfb
+          - libasound2t64  # Required for Chrome/Electron apps
+          - libreoffice    # Required for LiteParse document conversion
+          - imagemagick    # Required for LiteParse image ingestion
+        state: present
+        update_cache: yes
+      when: deploy_mode == 'online'
+
+    - name: ⚡ Check Intel RAPL powercap directory
+      stat:
+        path: /sys/class/powercap/intel-rapl:0/energy_uj
+      register: rapl_stat
+
+    - name: 🔓 Unlock RAPL energy counters for Telemetry
+      file:
+        path: /sys/class/powercap/intel-rapl:0/energy_uj
+        mode: '0444'
+      when: rapl_stat.stat.exists
+
+    - name: 🔒 Persist RAPL unlock across reboots
+      copy:
+        dest: /etc/systemd/system/rapl-unlock.service
+        content: |
+          [Unit]
+          Description=Unlock Intel RAPL energy counters for AOS Telemetry
+          After=local-fs.target
+          
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/chmod 0444 /sys/class/powercap/intel-rapl:0/energy_uj
+          RemainAfterExit=yes
+          
+          [Install]
+          WantedBy=multi-user.target
+      when: rapl_stat.stat.exists
+
+    - name: 🚀 Enable RAPL unlock service
+      systemd:
+        name: rapl-unlock
+        daemon_reload: yes
+        enabled: yes
+        state: started
+      when: rapl_stat.stat.exists
+
+    - name: 🔓 Fix AppArmor user namespace restriction (Ubuntu 24.04)
+      sysctl:
+        name: kernel.apparmor_restrict_unprivileged_userns
+        value: '0'
+        sysctl_file: /etc/sysctl.d/20-apparmor-userns.conf
+        reload: yes
+      ignore_errors: yes
+
+    # ============================================================
+    # 1.5 MODERN NODE.JS
+    # ============================================================
+    - name: 📦 Add NodeSource PPA for Node.js 22+
+      shell: curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      when: deploy_mode == 'online'
+      ignore_errors: yes
+
+    - name: 🛠️ Upgrade Node.js to v22+
+      apt:
+        name: nodejs
+        state: latest
+      when: deploy_mode == 'online'
+
+    # ============================================================
+    # 1.6 DOCKER & RAG INFRASTRUCTURE
+    # ============================================================
+    - name: 🐳 Install Docker prerequisites
+      apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - lsb-release
+        state: present
+      when: deploy_mode == 'online'
+
+    - name: 🐳 Add Docker GPG key
+      shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      when: deploy_mode == 'online'
+      ignore_errors: yes
+
+    - name: 🐳 Add Docker repository
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+      when: deploy_mode == 'online'
+      ignore_errors: yes
+
+    - name: 🐳 Install Docker CE & Compose plugin
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+      when: deploy_mode == 'online'
+      ignore_errors: yes
+
+    - name: 🐳 Add user to docker group
+      user:
+        name: "{{ real_user }}"
+        groups: docker
+        append: yes
+      ignore_errors: yes
+
+    - name: 📦 Install LiteParse (document parser)
+      npm:
+        name: "@llamaindex/liteparse"
+        global: yes
+      ignore_errors: yes
+      when: deploy_mode == 'online'
+
+    - name: 🗄️ Start pgvector Postgres container
+      shell: |
+        docker compose -f {{ aos_dir }}/docker-compose.yml up -d
+      ignore_errors: yes
+      when: deploy_mode == 'online'
+
+    # ============================================================
+    # 1.7 eGPU SWITCHER (OPTIONAL — Thunderbolt eGPU Support)
+    # ============================================================
+    - name: 🔌 Detect Thunderbolt controller
+      shell: "ls /sys/bus/thunderbolt/devices/ 2>/dev/null | head -1"
+      register: thunderbolt_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: 🔌 Check if egpu-switcher is already installed
+      stat:
+        path: /usr/bin/egpu-switcher
+      register: egpu_stat
+
+    - name: 🔌 Download egpu-switcher binary
+      get_url:
+        url: "https://github.com/hertg/egpu-switcher/releases/latest/download/egpu-switcher-amd64"
+        dest: "/usr/bin/egpu-switcher"
+        mode: '0755'
+      when:
+        - deploy_mode == 'online'
+        - not egpu_stat.stat.exists
+      ignore_errors: yes
+
+    - name: 🔌 Enable egpu-switcher auto-switch service
+      shell: egpu-switcher enable
+      when:
+        - thunderbolt_check.stdout | length > 0
+        - not egpu_stat.stat.exists
+      ignore_errors: yes
+
+    # ============================================================
+    # 2. AI ENGINE LAYER (OLLAMA & LM STUDIO)
+    # ============================================================
+    - name: 🧠 Check if Ollama is installed
+      stat:
+        path: /usr/local/bin/ollama
+      register: ollama_stat
+
+    - name: 📡 Install Ollama
+      shell: curl -fsSL https://ollama.com/install.sh | sh
+      when: deploy_mode == 'online' and not ollama_stat.stat.exists
+
+    - name: 📁 Create LM Studio directory
+      file:
+        path: /opt/lm-studio
+        state: directory
+        mode: '0755'
+      when: deploy_mode == 'online'
+
+    - name: ⬇️ Download LM Studio AppImage
+      get_url:
+        url: "{{ lm_studio_url }}"
+        dest: "/opt/lm-studio/LM_Studio.AppImage"
+        mode: '0755'
+      ignore_errors: yes
+      when: deploy_mode == 'online'
+
+    - name: 🧮 Hardware Profiling (Detect System RAM)
+      set_fact:
+        baseline_model: >-
+          {% if ansible_memtotal_mb < 8192 %}
+          qwen2.5-coder-1.5b-instruct
+          {% elif ansible_memtotal_mb >= 8192 and ansible_memtotal_mb < 24576 %}
+          qwen2.5-coder-7b-instruct
+          {% else %}
+          deepseek-coder-33b-instruct
+          {% endif %}
+
+    - name: 🧠 Auto-Download Baseline Model via LM Studio
+      command: /opt/lm-studio/LM_Studio.AppImage get {{ baseline_model }}
+      environment:
+        APPIMAGE_EXTRACT_AND_RUN: "1"
+      become_user: "{{ real_user }}"
+      ignore_errors: yes
+      when: deploy_mode == 'online'
+
+    - name: ⚙️ Create LM Studio Desktop Daemon
+      copy:
+        dest: /etc/systemd/system/lm-studio.service
+        content: |
+          [Unit]
+          Description=LM Studio Desktop Server
+          After=network.target graphical.target
+          
+          [Service]
+          User={{ real_user }}
+          WorkingDirectory=/home/{{ real_user }}
+          ExecStart=/opt/lm-studio/LM_Studio.AppImage
+          Restart=on-failure
+          RestartSec=5
+          Environment="APPIMAGE_EXTRACT_AND_RUN=1"
+          Environment="DISPLAY=:0"
+          
+          [Install]
+          WantedBy=graphical.target
+
+    - name: 🚀 Enable and Start LM Studio Daemon
+      systemd:
+        name: lm-studio
+        daemon_reload: yes
+        enabled: yes
+        state: started
+      ignore_errors: yes
+
+    # ============================================================
+    # 3. AOS PYTHON ENVIRONMENT
+    # ============================================================
+    - name: 🐍 Setup AOS Virtual Environment
+      command: python3 -m venv .venv
+      args:
+        chdir: "{{ aos_dir }}"
+        creates: "{{ aos_dir }}/.venv"
+      become_user: "{{ real_user }}"
+
+    - name: 📦 Install AOS pip dependencies
+      pip:
+        requirements: "{{ aos_dir }}/requirements.txt"
+        executable: "{{ aos_dir }}/.venv/bin/pip"
+      become_user: "{{ real_user }}"
+      when: deploy_mode == 'online'
+
+    # ============================================================
+    # 4. AGENTIC TOOLING (VS Codium + Continue.dev + MCP)
+    # ============================================================
+
+    # --- 4.1 uv (Python package runner for MCP servers) ---
+    - name: 🔧 Check if uv is installed
+      stat:
+        path: /usr/local/bin/uv
+      register: uv_stat
+
+    - name: 🔧 Install uv
+      shell: curl -LsSf https://astral.sh/uv/install.sh | sh
+      become_user: "{{ real_user }}"
+      environment:
+        UV_INSTALL_DIR: /usr/local/bin
+      when:
+        - deploy_mode == 'online'
+        - not uv_stat.stat.exists
+      ignore_errors: yes
+
+    # --- 4.2 MCP Server Configuration ---
+    - name: 🔌 Create AOS shared config directory
+      file:
+        path: "/home/{{ real_user }}/.config/aos"
+        state: directory
+        owner: "{{ real_user }}"
+        mode: '0755'
+
+    - name: 🔌 Deploy LM Studio MCP bridge script
+      copy:
+        src: "{{ aos_dir }}/config/lm_studio_mcp.py"
+        dest: "/home/{{ real_user }}/.config/aos/lm_studio_mcp.py"
+        owner: "{{ real_user }}"
+        mode: '0755'
+
+    # --- 4.3 VS Codium + Continue.dev ---
+    - name: 🖥️ Add VS Codium GPG key
+      shell: |
+        wget -qO - https://gitlab.com/nicedude/vscodium/-/raw/master/KEYS/pub.gpg \
+          | gpg --dearmor -o /usr/share/keyrings/vscodium-archive-keyring.gpg --yes
+      when: deploy_mode == 'online'
+      ignore_errors: yes
+
+    - name: 🖥️ Add VS Codium apt repository
+      copy:
+        dest: /etc/apt/sources.list.d/vscodium.list
+        content: |
+          deb [signed-by=/usr/share/keyrings/vscodium-archive-keyring.gpg] https://download.vscodium.com/debs vscodium main
+      when: deploy_mode == 'online'
+
+    - name: 🖥️ Install VS Codium
+      apt:
+        name: codium
+        state: present
+        update_cache: yes
+      when: deploy_mode == 'online'
+      ignore_errors: yes
+
+    - name: 🤖 Install Continue.dev extension
+      shell: codium --install-extension Continue.continue --force
+      become_user: "{{ real_user }}"
+      when: deploy_mode == 'online'
+      ignore_errors: yes
+
+    - name: 🏛️ Install AOS Intelligence Dashboard extension
+      shell: codium --install-extension {{ aos_dir }}/deploy/extensions/aos-telemetry-*.vsix --force
+      become_user: "{{ real_user }}"
+      ignore_errors: yes
+
+    - name: 🔌 Create VS Codium user config directory
+      file:
+        path: "/home/{{ real_user }}/.config/VSCodium/User"
+        state: directory
+        owner: "{{ real_user }}"
+        mode: '0755'
+
+    - name: 🔌 Deploy MCP config for VS Codium
+      template:
+        src: "{{ aos_dir }}/config/mcp_config.json"
+        dest: "/home/{{ real_user }}/.config/VSCodium/User/mcp.json"
+        owner: "{{ real_user }}"
+        mode: '0644'
+      ignore_errors: yes
+
+    - name: 🤖 Create Continue.dev config directory
+      file:
+        path: "/home/{{ real_user }}/.continue"
+        state: directory
+        owner: "{{ real_user }}"
+        mode: '0755'
+
+    - name: 🤖 Deploy Continue.dev configuration (LM Studio backend)
+      copy:
+        src: "{{ aos_dir }}/config/continue_config.json"
+        dest: "/home/{{ real_user }}/.continue/config.json"
+        owner: "{{ real_user }}"
+        mode: '0644'
+      ignore_errors: yes
+
+    - name: 🔗 Symlink AOS CLI for global use
+      file:
+        src: "{{ aos_dir }}/src/aos/cli.py"
+        dest: "/usr/local/bin/aos"
+        state: link
+        force: yes
+      ignore_errors: yes
+
+    # ============================================================
+    # 5. AOS DAEMON (SYSTEMD)
+    # ============================================================
+    - name: ⚙️ Create AOS Daemon
+      copy:
+        dest: /etc/systemd/system/aos-core.service
+        content: |
+          [Unit]
+          Description=AOS — Agentic Operating System
+          After=network.target
+          
+          [Service]
+          User={{ real_user }}
+          WorkingDirectory={{ aos_dir }}
+          ExecStart={{ aos_dir }}/.venv/bin/python3 -m aos.gateway.app
+          Restart=on-failure
+          RestartSec=10
+          Environment="PYTHONUNBUFFERED=1"
+          
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: 🚀 Enable and Start AOS Daemon
+      systemd:
+        name: aos-core
+        daemon_reload: yes
+        enabled: yes
+        state: restarted

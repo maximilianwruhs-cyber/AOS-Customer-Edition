@@ -1,0 +1,31 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime artifacts
+.env
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Data (runtime-generated)
+data/*.db
+data/*.json
+data/pgdata/
+!data/.gitkeep
+!data/ingress/.gitkeep
+
+# ISO build workspace
+deploy/iso/iso_work/
+*.iso
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug logs
+*.log
+
+# VS Codium Extension builds (we ship the pre-built .vsix)
+# deploy/extensions/*.vsix is tracked intentionally
