@@ -1,4 +1,8 @@
-# 🏛️ AOS — Agentic Operating System
+# 🏛️ AOS — Agentic Operating System (Customer Edition)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform: Ubuntu](https://img.shields.io/badge/platform-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
+[![Part of: AgenticOS](https://img.shields.io/badge/ecosystem-AgenticOS-blue)](https://github.com/maximilianwruhs-cyber)
 
 **The Plug-and-Play, Agentic-First Operating System for the Cloud-Edge Era.**
 
@@ -166,6 +170,18 @@ ollama list | grep nomic-embed-text
 # If missing, pull it
 ollama pull nomic-embed-text
 ```
+
+---
+
+## AgenticOS Ecosystem
+
+| Project | Description |
+|---------|-------------|
+| [**AOS**](https://github.com/maximilianwruhs-cyber/AOS) | The flagship sovereign AI layer — core architecture & development |
+| [**AOS Intelligence Dashboard**](https://github.com/maximilianwruhs-cyber/AOS-Intelligence-Dashboard) | VS Codium extension for real-time energy monitoring & LLM leaderboard |
+| [**Obolus**](https://github.com/maximilianwruhs-cyber/Obolus) | Intelligence per Watt — benchmark which LLM is most efficient on your hardware |
+| [**HSP**](https://github.com/maximilianwruhs-cyber/HSP) | Hardware Sonification Pipeline — turn machine telemetry into music |
+| [**HSP VS Codium Extension**](https://github.com/maximilianwruhs-cyber/HSP-VS-Codium-Extension) | VS Codium sidebar for live HSP telemetry visualization |
 
 ## License
 
